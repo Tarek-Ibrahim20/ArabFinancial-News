@@ -1,0 +1,13 @@
+pandas
+python-dotenv
+requests
+transformers
+matplotlib
+langchain
+langchain-core
+langchain-text-splitters
+langchain-huggingface
+langchain-ollama
+sentence-transformers
+langchain_classic
+flashrank

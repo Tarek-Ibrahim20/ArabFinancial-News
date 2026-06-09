@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+venv/
+
+# Secrets
+.env
+
+# Generated artifacts
+sample_dataset.csv
+token_distribution.png
+
+# Vector store (rebuilt by vectorstore.py)
+qdrant_db/
