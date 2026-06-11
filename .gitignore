@@ -15,3 +15,5 @@ token_distribution.png
 
 # Vector store (rebuilt by vectorstore.py)
 qdrant_db/
+.claude/
+

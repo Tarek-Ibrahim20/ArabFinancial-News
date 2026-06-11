@@ -11,3 +11,4 @@ langchain-ollama
 sentence-transformers
 langchain_classic
 flashrank
+langchain-openai
