@@ -1,0 +1,25 @@
+{
+  "timestamp": "20260617_021725",
+  "judge_model": "qwen2.5:7b",
+  "metrics": [
+    "faithfulness",
+    "context_precision",
+    "context_recall",
+    "answer_correctness"
+  ],
+  "n_questions": 7,
+  "overall": {
+    "faithfulness": 0.5833333333333334,
+    "context_precision": 0.7399999999329999,
+    "context_recall": 0.8571428571428571,
+    "answer_correctness": 0.380759647371047
+  },
+  "by_type": {
+    "factual": {
+      "faithfulness": 0.5833333333333334,
+      "context_precision": 0.7399999999329999,
+      "context_recall": 0.8571428571428571,
+      "answer_correctness": 0.380759647371047
+    }
+  }
+}
