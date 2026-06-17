@@ -4,6 +4,7 @@
 # prints results to stdout for inspection. Not imported by other modules.
 
 from rag_chain import answer
+from retrieval import retrieve
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 # def print_results(query: str, results: list):
@@ -17,7 +18,7 @@ from rag_chain import answer
 #         print()
 
 # ── Test queries ──────────────────────────────────────────────────────────────
-q = " اسعار النفط في عام 2020"
+q = "ما هي الفرق بين خطط خدمة البث التدفقي لأبل وديزني+؟"
 
 result = answer(q)
 print(result)

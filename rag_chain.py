@@ -115,6 +115,35 @@ def _format_references(body: str, docs: list[Document]) -> str:
     return "\n ".join(lines)
 
 
+_NO_DATA = "لا تتوفر معلومات كافية في قاعدة البيانات."
+
+
+def _sources(docs: list[Document]) -> list[dict]:
+    # Provenance list in post-U-shape order, so index matches the [N] numbering.
+    return [
+        {"title": d.metadata["title"], "date": d.metadata["date"], "url": d.metadata["url"]}
+        for d in docs
+    ]
+
+
+def _generate(user_query: str, docs: list[Document]) -> tuple[str, list[Document]]:
+    # Core augmentation: dedup → U-shape → format → LLM → append references.
+    # Returns the final answer body and the (reordered) docs actually used as context,
+    # so callers can read back the exact chunks fed to the model.
+    docs    = _deduplicate(docs)
+    docs    = _u_shape(docs)
+    context = _format_context(docs)
+
+    response = _llm.invoke(
+        _RAG_PROMPT.format_messages(context=context, question=user_query)
+    )
+
+    body = response.content.strip()
+    if re.search(r"\[(\d+)\]", body):
+        body = f"{body}\n\n{_format_references(body, docs)}"
+    return body, docs
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def answer(user_query: str) -> dict:
@@ -128,28 +157,37 @@ def answer(user_query: str) -> dict:
     """
     docs = retrieve(user_query)
     if not docs:
-        return {"answer": "لا تتوفر معلومات كافية في قاعدة البيانات.", "sources": []}
+        return {"answer": _NO_DATA, "sources": []}
 
-    docs    = _deduplicate(docs)
-    docs    = _u_shape(docs)
-    context = _format_context(docs)
+    body, docs = _generate(user_query, docs)
+    return {"answer": body, "sources": _sources(docs)}
 
-    print("=== RAG CONTEXT START ===")
-    print(context)
-    print("=== RAG CONTEXT END ===")
 
-    response = _llm.invoke(
-        _RAG_PROMPT.format_messages(context=context, question=user_query)
-    )
+def answer_for_eval(user_query: str) -> dict:
+    """Evaluation entry point — same generation as answer(), plus the inputs Ragas needs.
 
-    body = response.content.strip()
-    cited = re.findall(r"\[(\d+)\]", body)
-    if cited:
-        body = f"{body}\n\n{_format_references(body, docs)}"
+    Returns:
+        {
+            "answer":        str,        # final Arabic answer (with references block)
+            "contexts":      list[str],  # exact chunk texts fed to the LLM (post-U-shape order)
+            "sources":       list[dict], # provenance, aligned 1:1 with contexts
+            "retrieved_ids": list[int],  # article ids in RAW retrieve() ranking (best->worst),
+                                         # captured before dedup/U-shape — for retrieval metrics
+        }
+    """
+    docs = retrieve(user_query)
+    if not docs:
+        return {"answer": _NO_DATA, "contexts": [], "sources": [], "retrieved_ids": []}
 
-    sources = [
-        {"title": d.metadata["title"], "date": d.metadata["date"], "url": d.metadata["url"]}
-        for d in docs
-    ]
-    return {"answer": body.strip()}
+    # Capture the raw retrieval ranking BEFORE _generate dedups/U-shape-reorders the docs;
+    # retrieval metrics (Hit@k, MRR, Precision@k) are rank-sensitive and need this order.
+    retrieved_ids = [d.metadata["id"] for d in docs]
+
+    body, gen_docs = _generate(user_query, docs)
+    return {
+        "answer":        body,
+        "contexts":      [d.page_content for d in gen_docs],
+        "sources":       _sources(gen_docs),
+        "retrieved_ids": retrieved_ids,
+    }
 

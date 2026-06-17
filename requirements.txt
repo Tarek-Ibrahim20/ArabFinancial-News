@@ -11,4 +11,6 @@ langchain-ollama
 sentence-transformers
 langchain_classic
 flashrank
-langchain-openai
+ragas
+datasets
+# langchain-openai

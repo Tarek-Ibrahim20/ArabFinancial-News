@@ -55,7 +55,7 @@ _vectorstore = QdrantVectorStore(
 )
 
 # ── Reranker ──────────────────────────────────────────────────────────────────
-_compressor = FlashrankRerank(client=Ranker(model_name="miniReranker_arabic_v1"), top_n=5 , score_threshold= 0.7)
+_compressor = FlashrankRerank(client=Ranker(model_name="miniReranker_arabic_v1"), top_n=5 , score_threshold= 0.5)
 
 # ── Chain 1 — Temporal extraction (year / month only) ────────────────────────
 class TemporalFilter(BaseModel):
