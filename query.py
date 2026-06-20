@@ -3,7 +3,7 @@
 # Imports the production retrieve() function from retrieval.py and
 # prints results to stdout for inspection. Not imported by other modules.
 
-from rag_chain import answer
+from rag_chain import answer , answer_stream
 from retrieval import retrieve
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -20,6 +20,8 @@ from retrieval import retrieve
 # ── Test queries ──────────────────────────────────────────────────────────────
 q = "ما هي الفرق بين خطط خدمة البث التدفقي لأبل وديزني+؟"
 
-result = answer(q)
-print(result)
-
+full_answer =[]
+for chunk in answer_stream(q):
+    if chunk['type'] == 'token':
+            full_answer.append(chunk['text'])
+print("".join(full_answer))

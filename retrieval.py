@@ -34,6 +34,7 @@ _MODEL_ID    = _config["model_id"]
 _QDRANT_PATH = _config["qdrant_path"]
 _COLLECTION  = _config["qdrant_collection"]
 _LLM_MODEL   = _config["LLM_model"]
+_KEEP_ALIVE  = _config.get("keep_alive", "30m")
 
 # ── Vectorstore (initialised once on import) ──────────────────────────────────
 _dense_embedder = HuggingFaceEmbeddings(
@@ -96,7 +97,7 @@ _semantic_prompt = ChatPromptTemplate.from_messages([
     ("human", "{user_input}"),
 ])
 
-_llm = ChatOllama(model=_LLM_MODEL, temperature=0)
+_llm = ChatOllama(model=_LLM_MODEL, temperature=0, keep_alive=_KEEP_ALIVE)
 _temporal_chain = _temporal_prompt | _llm.with_structured_output(TemporalFilter)
 _semantic_chain = _semantic_prompt | _llm.with_structured_output(SemanticQuery)
 
