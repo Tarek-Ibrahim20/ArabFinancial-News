@@ -12,6 +12,7 @@ Production Arabic financial news RAG app built on the
 | Splitter | `RecursiveCharacterTextSplitter` — 500 tokens, 50 overlap |
 | LLM (local) | `qwen2.5:7b` via Ollama |
 | Framework | LangChain (v1.x) |
+| Serving | FastAPI + Uvicorn (`--workers 1`) |
 | Eval | Ragas 0.4.3 (local `qwen2.5:7b` judge) + deterministic retrieval metrics |
 
 ## Config — `.env` keys
@@ -24,6 +25,7 @@ chunk_overlap      overlap tokens (50)
 qdrant_path        local directory for Qdrant persistence
 qdrant_collection  Qdrant collection name
 LLM_model          Ollama model tag
+keep_alive         Ollama model retention (default "30m"; set "-1" to keep forever)
 ```
 
 ## Pipeline status
@@ -45,7 +47,7 @@ LLM_model          Ollama model tag
 | `retrieval.py` | **Retrieval** | **Production retrieval module.** Import and call `retrieve(user_query)`. Pipeline: LLM parses Arabic query → semantic text + year/month filters → Qdrant hybrid search (k=50 candidates) → FlashRank Arabic reranker → top 5 sorted by relevance score. All module-level state is private (`_`-prefixed). No side effects on import. |
 | `query.py` | Retrieval experiment | Test/debug script. Mirrors `retrieval.py` logic but prints results to stdout. Use to manually inspect retrieval quality. Not imported by other modules. |
 | `gg.py` | Retrieval experiment | Earlier scratch file. Superseded by `query.py`. |
-| `rag_chain.py` | **Augmentation** | **Production RAG module.** `answer(query) → {answer, sources}`. Pipeline: `retrieve` → `_deduplicate` (content-hash) → `_u_shape` (Lost-in-the-Middle reorder) → `_format_context` (numbered source blocks) → Ollama LLM (inline `[N]` citations) → `_format_references` (code-rendered `## المراجع`). Also exposes `answer_for_eval(query) → {answer, contexts, sources, retrieved_ids}` for the eval harness — `retrieved_ids` is the **raw `retrieve()` ranking** (captured before dedup/U-shape), `contexts` are post-U-shape. |
+| `rag_chain.py` | **Augmentation** | **Production RAG module.** `answer(query) → {answer, sources}`. Pipeline: `retrieve` → `_deduplicate` (content-hash) → `_u_shape` (Lost-in-the-Middle reorder) → `_format_context` (numbered source blocks) → Ollama LLM (inline `[N]` citations) → `_format_references` (code-rendered `## المراجع`). Also exposes `answer_stream(query)` (sync generator for streaming) and `answer_for_eval(query) → {answer, contexts, sources, retrieved_ids}` for the eval harness. |
 | `eval/build_golden.py` | **Eval** | Generates the golden dataset (drafts) via `qwen2.5:7b`. Stratified (year/month) article sampling; keyword-pairs articles for `comparison`/`multi_hop`. Writes `eval/golden_dataset.jsonl`. Drafts must be **human-verified** (`"verified": true`) before trustworthy use. |
 | `eval/generate_outputs.py` | **Eval** | **Single generation step — run FIRST.** Calls `answer_for_eval` once per golden question and writes the shared dump (`pipeline_outputs_<stamp>.jsonl` + stable `pipeline_outputs_latest.jsonl`). Both metric scripts read this dump, so the RAG pipeline runs **once** for the whole eval. Config via module-level constants (`_VERIFIED_ONLY`, `_LIMIT`). |
 | `eval/retrieval_metrics.py` | **Eval** | Deterministic retrieval scoring (no LLM judge). **Reads the shared dump** (`pipeline_outputs_latest.jsonl`), compares each record's `retrieved_ids` to `reference_article_ids` → Hit@k, Recall@k, Precision@k, MRR, broken down by `question_type`. Does **not** import the retrieval stack. Errors if the dump is missing. Report → `eval/results/`. |
@@ -58,6 +60,7 @@ LLM_model          Ollama model tag
 | `qdrant_db/` | Artifact | Persisted Qdrant vector store. Rebuilt by `vectorstore.py`. |
 | `eval/golden_dataset.jsonl` | Artifact | Golden eval set. One JSON record/line: `question`, `question_type`, `ground_truth`, `reference_article_ids`, `reference_contexts`, `verified`. |
 | `eval/results/` | Artifact | Timestamped metric reports + pipeline-output dumps. `pipeline_outputs_latest.jsonl` is the stable shared dump both metric scripts read. |
+| `logs/rag_requests.jsonl` | Artifact | Per-request log (gitignored). Fields: `ts`, `endpoint`, `query`, `answer`, `sources`, `num_sources`, `latency_s`, `status`. |
 
 ## Metadata schema (Qdrant payload)
 Every chunk carries:
@@ -190,10 +193,11 @@ dump. The consumers score whatever is in the dump.
 
 ## Serving — `api.py`
 
-FastAPI HTTP layer over `rag_chain.answer`. Endpoints:
-- `POST /ask` — body `{"query": str}` (non-empty; 422 otherwise) → `{"answer": str, "sources": [{title, date, url}]}`. Passes `answer()`'s dict straight through (incl. the Arabic no-data fallback + empty `sources`).
-- `GET /health` — `{"status": "ok", "ready": true}`; returns **503** until the pipeline finishes loading.
-- Auto OpenAPI docs at `/docs`.
+FastAPI HTTP layer over `rag_chain`. Endpoints:
+- `POST /ask` — `{"query": str}` → `{"answer": str, "sources": [{title, date, url}]}`. 422 on empty query.
+- `POST /ask/stream` — same query body → plain-text stream. Arabic tokens arrive as they are generated; a `---` separator and numbered source list are appended at the end.
+- `GET /health` — `{"status": "ok", "ready": true}`; 503 until pipeline is loaded.
+- `GET /docs` — interactive Swagger UI.
 
 ### Run
 ```
@@ -201,16 +205,12 @@ uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 Pre-reqs: Ollama running with `qwen2.5:7b` pulled, and `qdrant_db/` built (`vectorstore.py`).
 
-How to test in Postman:
-- POST http://localhost:8000/ask/stream with {"query": "..."}
-- Go to Settings → Response → Send response as stream (toggle on)
-- You'll see SSE lines arriving one by one: data: {"type":"token","text":"..."} then a final data: {"type":"sources",...} and data: [DONE]
-
 ### Design notes
-- **Load once, at startup.** The pipeline imports inside the FastAPI `lifespan` (not at module top) because `import rag_chain` costs ~2-5 s and opens the Qdrant file lock. Import failure (Ollama down, store locked) re-raises → server fails fast.
-- **Serialize requests.** A module-level `threading.Lock` guards each `answer()` call; the blocking call runs in a threadpool (`run_in_threadpool`) so the event loop and `/health` stay responsive during the 2-7 s generation.
-- **`--workers 1` is required.** Each worker is a separate process that would load the full pipeline (~500-700 MB) and contend on the Qdrant file lock — multiple workers reintroduce the exact concurrency hazard the in-process lock prevents. Scale by adding a request queue / dedicated inference service, not workers.
-- No new config: `api.py` adds no env keys; the pipeline reads `.env` itself on import.
+- **Load once, warm up.** `lifespan` imports `rag_chain` (~2-5 s) then fires a warm-up query to load Ollama model weights into RAM before the first real request.
+- **Serialize requests.** `threading.Lock` inside `run_in_threadpool` ensures one pipeline call at a time (Qdrant file lock + single Ollama connection). Event loop stays free for `/health`.
+- **90s timeout.** `asyncio.wait_for` on both endpoints returns 504 if the pipeline hangs.
+- **Per-request logging.** `_log_query` appends one JSONL record to `logs/rag_requests.jsonl` after every request (query, answer, sources, num_sources, latency, status).
+- **`--workers 1` is required.** Multiple workers each load the full pipeline (~500-700 MB) and re-introduce Qdrant file-lock contention. Scale via a request queue or dedicated inference service.
 
 ## Next steps
 1. **Human-verify** the golden drafts (`"verified": true`), then set `_VERIFIED_ONLY = True` in

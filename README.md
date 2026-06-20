@@ -138,33 +138,30 @@ uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | `GET` | `/health` | — | `{"status":"ok","ready":true}` (503 until loaded) |
-| `POST` | `/ask` | `{"query": "..."}` | `{"answer": "...", "sources": [...]}` |
+| `POST` | `/ask` | `{"query": "..."}` | `{"answer": "...", "sources": [...]}` — full JSON |
+| `POST` | `/ask/stream` | `{"query": "..."}` | Arabic text stream + source list |
 | `GET` | `/docs` | — | Interactive Swagger UI |
 
-> ⚠️ `/ask` is **POST only** — sending a `GET` (e.g. typing the URL in a browser) returns
-> **405 Method Not Allowed**.
+Both `/ask` and `/ask/stream` accept `POST` only — a `GET` to either returns **405**.
 
-### Example — curl
+### Example — curl (full response)
 ```bash
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"query": "ما أخبار أسعار النفط في 2020؟"}'
 ```
 
-### Example — Postman
-1. Method **POST**, URL `http://localhost:8000/ask`
-2. **Body → raw → JSON**
-3. ```json
-   { "query": "ما أخبار أسعار النفط في 2020؟" }
-   ```
-4. **Send** (first answer may take 2–7 s).
+### Example — Postman (streaming)
+1. Method **POST**, URL `http://localhost:8000/ask/stream`
+2. **Body → raw → JSON**: `{ "query": "ما أخبار أسعار النفط في 2020؟" }`
+3. **Send** — Arabic text appears token by token, followed by a `---` separator and numbered sources.
 
-Or just open **`http://localhost:8000/docs`** and use the **"Try it out"** button — no client setup needed.
+Or open **`http://localhost:8000/docs`** and use **"Try it out"** — no client setup needed.
 
-### Example response
+### Example response (`/ask`)
 ```json
 {
-  "answer": "... النص العربي مع اقتباسات [1] [2] ...\n\n## المراجع\n1. https://... (2020-01-07)",
+  "answer": "تراجعت أسعار النفط الخام في مطلع يناير 2020 [1]...\n\n## المراجع\n1. https://... (2020-01-07)",
   "sources": [
     { "title": "...", "date": "2020-01-07", "url": "https://..." }
   ]
@@ -191,8 +188,6 @@ judge caveats, and known findings.
 
 ## Notes
 
-- **Ollama model eviction:** the FastAPI pipeline stays loaded, but Ollama unloads model
-  weights after ~5 min idle (default `keep_alive`), so the first query after a long gap pays a
-  brief reload-from-disk cost. Pin `keep_alive` on the `ChatOllama` instances (or set
-  `OLLAMA_KEEP_ALIVE`) to avoid it.
+- **Ollama model retention:** controlled by the `keep_alive` key in `.env` (default `"30m"`). Set `"-1"` to keep `qwen2.5:7b` in RAM indefinitely. The server also fires a warm-up query at startup so Ollama weights are hot before the first real request.
 - **`.env` is never committed** — it holds all runtime config.
+- **Request log:** every query is appended to `logs/rag_requests.jsonl` (gitignored). Load with `pd.read_json("logs/rag_requests.jsonl", lines=True)` to analyze latency, error rates, and retrieval health (`num_sources=0` means the no-data fallback fired).
