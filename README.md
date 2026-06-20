@@ -1,6 +1,6 @@
 # ArabFinancial News — RAG Pipeline
 
-A production Arabic financial-news **Retrieval-Augmented Generation** app built on the
+An Arabic financial-news **Retrieval-Augmented Generation** app built on the
 [AraFinNews](https://github.com/ArabicNLP-UK/AraFinNews) dataset (~10 k articles). It
 answers Arabic questions about financial news, grounded in retrieved source articles, with
 inline `[N]` citations and a `## المراجع` bibliography — served over HTTP via FastAPI.
