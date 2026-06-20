@@ -33,6 +33,7 @@ LLM_model          Ollama model tag
 - [x] **Retrieval** — hybrid self-query + Arabic reranking (`retrieval.py`)
 - [x] **Augmentation** — dedup → U-shape → inline-citation generation (`rag_chain.py`)
 - [ ] **Evaluation** — golden set + retrieval & generation metrics (`eval/`) ← **current**
+- [x] **Serving** — FastAPI HTTP layer (`api.py`)
 
 ## Files
 
@@ -49,6 +50,7 @@ LLM_model          Ollama model tag
 | `eval/generate_outputs.py` | **Eval** | **Single generation step — run FIRST.** Calls `answer_for_eval` once per golden question and writes the shared dump (`pipeline_outputs_<stamp>.jsonl` + stable `pipeline_outputs_latest.jsonl`). Both metric scripts read this dump, so the RAG pipeline runs **once** for the whole eval. Config via module-level constants (`_VERIFIED_ONLY`, `_LIMIT`). |
 | `eval/retrieval_metrics.py` | **Eval** | Deterministic retrieval scoring (no LLM judge). **Reads the shared dump** (`pipeline_outputs_latest.jsonl`), compares each record's `retrieved_ids` to `reference_article_ids` → Hit@k, Recall@k, Precision@k, MRR, broken down by `question_type`. Does **not** import the retrieval stack. Errors if the dump is missing. Report → `eval/results/`. |
 | `eval/run_ragas.py` | **Eval** | Generation-quality scoring via Ragas. **Reads the shared dump** (no regeneration) and scores faithfulness / context_precision / context_recall / answer_correctness with the local `qwen2.5:7b` judge (`answer_relevancy` available but off by default — low-trust on Arabic). Errors if the dump is missing. Report → `eval/results/`. |
+| `api.py` | **Serving** | **Production HTTP layer.** FastAPI wrapper around `rag_chain.answer`. `POST /ask` (`{query}` → `{answer, sources}`) and `GET /health` (503 until ready). Pipeline loads **once** in the `lifespan` startup (import is ~2-5 s); requests are serialized behind a single `threading.Lock` (Qdrant file lock + single Ollama conn) and run in a threadpool so `/health` stays responsive. Run with **`uvicorn api:app --workers 1`** — see Serving section. |
 | `sample_dataset.csv` | Artifact | 10 k-row preprocessed dataset. Source of truth for `vectorstore.py`. |
 | `token_distribution.png` | Artifact | Histogram of article token lengths with chunk-size reference lines. |
 | `requirements.txt` | Config | Python package dependencies (includes `flashrank`, `ragas`, `datasets`). |
@@ -185,6 +187,30 @@ dump. The consumers score whatever is in the dump.
 - **Known finding**: multi-source questions (`comparison`/`multi_hop`) bottleneck at
   Recall@5 ≈ 0.5 — single-query retrieval fetches one of two needed articles. Fix path =
   query decomposition, not prompt tuning.
+
+## Serving — `api.py`
+
+FastAPI HTTP layer over `rag_chain.answer`. Endpoints:
+- `POST /ask` — body `{"query": str}` (non-empty; 422 otherwise) → `{"answer": str, "sources": [{title, date, url}]}`. Passes `answer()`'s dict straight through (incl. the Arabic no-data fallback + empty `sources`).
+- `GET /health` — `{"status": "ok", "ready": true}`; returns **503** until the pipeline finishes loading.
+- Auto OpenAPI docs at `/docs`.
+
+### Run
+```
+uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
+```
+Pre-reqs: Ollama running with `qwen2.5:7b` pulled, and `qdrant_db/` built (`vectorstore.py`).
+
+How to test in Postman:
+- POST http://localhost:8000/ask/stream with {"query": "..."}
+- Go to Settings → Response → Send response as stream (toggle on)
+- You'll see SSE lines arriving one by one: data: {"type":"token","text":"..."} then a final data: {"type":"sources",...} and data: [DONE]
+
+### Design notes
+- **Load once, at startup.** The pipeline imports inside the FastAPI `lifespan` (not at module top) because `import rag_chain` costs ~2-5 s and opens the Qdrant file lock. Import failure (Ollama down, store locked) re-raises → server fails fast.
+- **Serialize requests.** A module-level `threading.Lock` guards each `answer()` call; the blocking call runs in a threadpool (`run_in_threadpool`) so the event loop and `/health` stay responsive during the 2-7 s generation.
+- **`--workers 1` is required.** Each worker is a separate process that would load the full pipeline (~500-700 MB) and contend on the Qdrant file lock — multiple workers reintroduce the exact concurrency hazard the in-process lock prevents. Scale by adding a request queue / dedicated inference service, not workers.
+- No new config: `api.py` adds no env keys; the pipeline reads `.env` itself on import.
 
 ## Next steps
 1. **Human-verify** the golden drafts (`"verified": true`), then set `_VERIFIED_ONLY = True` in

@@ -14,4 +14,6 @@ sample_dataset.csv
 # Vector store (rebuilt by vectorstore.py)
 qdrant_db/
 .claude/
+# Runtime request logs
+logs/
 

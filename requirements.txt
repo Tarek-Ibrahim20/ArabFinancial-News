@@ -8,9 +8,12 @@ langchain-core
 langchain-text-splitters
 langchain-huggingface
 langchain-ollama
+langchain-qdrant
 sentence-transformers
 langchain_classic
 flashrank
 ragas
 datasets
+fastapi
+uvicorn[standard]
 # langchain-openai

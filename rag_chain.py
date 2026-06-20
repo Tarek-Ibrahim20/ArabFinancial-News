@@ -20,12 +20,13 @@ from langchain_ollama import ChatOllama
 from retrieval import retrieve
 
 # ── Config ────────────────────────────────────────────────────────────────────
-_config    = dotenv_values(".env")
-_LLM_MODEL = _config["LLM_model"]
+_config     = dotenv_values(".env")
+_LLM_MODEL  = _config["LLM_model"]
+_KEEP_ALIVE = _config.get("keep_alive", "30m")
 # _GENERATION_MODEL = _config["generation_model"]
 
 # ── LLM (generation only — retrieval stack lives in retrieval.py) ─────────────
-_llm = ChatOllama(model=_LLM_MODEL, temperature=0, num_ctx=5000 )
+_llm = ChatOllama(model=_LLM_MODEL, temperature=0, num_ctx=5000, keep_alive=_KEEP_ALIVE)
 # _gen_llm = ChatOpenAI(model=_GENERATION_MODEL, temperature=0)
 
 # ── RAG prompt ────────────────────────────────────────────────────────────────
@@ -161,6 +162,37 @@ def answer(user_query: str) -> dict:
 
     body, docs = _generate(user_query, docs)
     return {"answer": body, "sources": _sources(docs)}
+
+
+def answer_stream(user_query: str):
+    """Sync generator for streaming responses.
+
+    Yields dicts in two shapes:
+      {"type": "token",   "text": "<chunk>"}   — LLM output as it arrives
+      {"type": "sources", "sources": [...]}     — final provenance, after generation ends
+    """
+    docs = retrieve(user_query)
+    if not docs:
+        yield {"type": "token",   "text": _NO_DATA}
+        yield {"type": "sources", "sources": []}
+        return
+
+    docs     = _deduplicate(docs)
+    docs     = _u_shape(docs)
+    context  = _format_context(docs)
+    messages = _RAG_PROMPT.format_messages(context=context, question=user_query)
+
+    body_parts: list[str] = []
+    for chunk in _llm.stream(messages):
+        text = chunk.content
+        body_parts.append(text)
+        yield {"type": "token", "text": text}
+
+    body = "".join(body_parts).strip()
+    if re.search(r"\[(\d+)\]", body):
+        yield {"type": "token", "text": f"\n\n{_format_references(body, docs)}"}
+
+    yield {"type": "sources", "sources": _sources(docs)}
 
 
 def answer_for_eval(user_query: str) -> dict:
